@@ -47,3 +47,28 @@ terraform apply
 ```
 
 To add future environments (such as `prod` or `qa`), simply add a folder under `environments/` (e.g. `environments/prod`) and call the same reusable `modules/`.
+
+---
+
+## DevSecOps Security Scanning Pipeline
+
+This repository includes a multi-stage GitHub Actions security workflow located in [`.github/workflows/security-scan.yml`](file:///D:/K8 Practice/.github/workflows/security-scan.yml).
+
+### Scanning Stages
+
+| # | Security Stage | Tool | Description & Scope |
+| :-: | :--- | :--- | :--- |
+| **1** | **Secret Scanning** | **Gitleaks** | Scans Git commit history and PRs for hardcoded passwords, private keys, API keys, and Azure credentials. |
+| **2** | **IaC Compliance & Policy** | **Checkov** | Scans Terraform & Kubernetes resources against CIS benchmarks, Azure security best practices, and policy compliance. |
+| **3** | **Vulnerability & Misconfig** | **Aqua Trivy** | Deep scanning for configuration flaws, CVE vulnerabilities, and insecure defaults across IaC manifests. |
+| **4** | **Terraform Lint & Validate** | **TFLint & Terraform CLI** | Verifies Terraform formatting (`fmt`), syntax validity, and enforces AzureRM provider rules via `tflint-ruleset-azurerm`. |
+| **5** | **SAST Analysis** | **Semgrep** | Static Application Security Testing for OWASP Top 10, CWE security patterns, and logic flaws in code and scripts. |
+| **6** | **Container & Dockerfile** | **Hadolint** | Validates Dockerfiles for security anti-patterns (such as root user, unpinned tags, unsafe package installs). Skips automatically if no Dockerfiles are present. |
+| **7** | **Quality Gate & Scorecard** | **GitHub Actions Summary** | Publishes a unified security scorecard to the Job Summary and aggregates SARIF reports into the GitHub Security tab. |
+
+### Pipeline Triggers
+
+- **Push & Pull Requests**: Triggers on code changes targeting `main` or `master`.
+- **Scheduled Audit**: Automatic weekly audit every Monday at 02:00 UTC.
+- **Manual Trigger**: Can be dispatched on-demand from the GitHub Actions tab (`workflow_dispatch`).
+

@@ -1,0 +1,18 @@
+# -----------------------------------------------------------------------------
+# Checkov IaC Security Configuration
+# -----------------------------------------------------------------------------
+framework:
+  - terraform
+  - kubernetes
+
+compact: true
+quiet: false
+soft-fail: true
+
+# Directory to scan
+directory:
+  - .
+
+# Skip local terraform cache
+skip-path:
+  - environments/dev/.terraform

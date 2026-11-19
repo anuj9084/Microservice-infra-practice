@@ -1,0 +1,11 @@
+# -----------------------------------------------------------------------------
+# Gitleaks Configuration
+# -----------------------------------------------------------------------------
+title = "Gitleaks Configuration for Terraform & Kubernetes"
+
+[allowlist]
+description = "Ignore Terraform provider lockfiles and local caches"
+paths = [
+  '''\.terraform\.lock\.hcl$''',
+  '''\.terraform/'''
+]
