@@ -79,6 +79,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: security
     if: github.event_name != 'schedule'
+    environment: ${{ inputs.environment || 'dev' }}
     permissions:
       contents: read
     env:
@@ -101,8 +102,8 @@ jobs:
       - name: Terraform Init & Plan
         working-directory: environments/${{ inputs.environment || 'dev' }}
         run: |
-          if [ -z "$AZURE_CREDENTIALS" ] || [ -z "$TF_STATE_RG" ] || [ -z "$TF_STATE_STORAGE" ] || [ -z "$TF_STATE_CONTAINER" ]; then
-            echo "::error::Set AZURE_CREDENTIALS secret and TF_STATE_RG, TF_STATE_STORAGE, TF_STATE_CONTAINER."
+          if [ -z "$AZURE_CREDENTIALS" ]; then
+            echo "::error::Set AZURE_CREDENTIALS secret."
             exit 1
           fi
           export ARM_CLIENT_ID=$(jq -r '.clientId' <<< "$AZURE_CREDENTIALS")
@@ -111,11 +112,13 @@ jobs:
           export ARM_TENANT_ID=$(jq -r '.tenantId' <<< "$AZURE_CREDENTIALS")
           echo "::add-mask::$ARM_CLIENT_SECRET"
 
-          terraform init -input=false \
-            -backend-config="resource_group_name=$TF_STATE_RG" \
-            -backend-config="storage_account_name=$TF_STATE_STORAGE" \
-            -backend-config="container_name=$TF_STATE_CONTAINER" \
-            -backend-config="key=${TF_ENV}.terraform.tfstate"
+          BACKEND_ARGS=()
+          if [ -n "$TF_STATE_RG" ]; then BACKEND_ARGS+=("-backend-config=resource_group_name=$TF_STATE_RG"); fi
+          if [ -n "$TF_STATE_STORAGE" ]; then BACKEND_ARGS+=("-backend-config=storage_account_name=$TF_STATE_STORAGE"); fi
+          if [ -n "$TF_STATE_CONTAINER" ]; then BACKEND_ARGS+=("-backend-config=container_name=$TF_STATE_CONTAINER"); fi
+          if [ -n "$TF_STATE_RG$TF_STATE_STORAGE$TF_STATE_CONTAINER" ]; then BACKEND_ARGS+=("-backend-config=key=${TF_ENV}.terraform.tfstate"); fi
+
+          terraform init -input=false "${BACKEND_ARGS[@]}"
 
           if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$TF_ACTION" = "destroy" ]; then
             terraform plan -destroy -input=false -no-color
@@ -154,17 +157,23 @@ jobs:
       - name: Terraform Init & Apply
         working-directory: environments/${{ inputs.environment || 'dev' }}
         run: |
+          if [ -z "$AZURE_CREDENTIALS" ]; then
+            echo "::error::Set AZURE_CREDENTIALS secret."
+            exit 1
+          fi
           export ARM_CLIENT_ID=$(jq -r '.clientId' <<< "$AZURE_CREDENTIALS")
           export ARM_CLIENT_SECRET=$(jq -r '.clientSecret' <<< "$AZURE_CREDENTIALS")
           export ARM_SUBSCRIPTION_ID=$(jq -r '.subscriptionId' <<< "$AZURE_CREDENTIALS")
           export ARM_TENANT_ID=$(jq -r '.tenantId' <<< "$AZURE_CREDENTIALS")
           echo "::add-mask::$ARM_CLIENT_SECRET"
 
-          terraform init -input=false \
-            -backend-config="resource_group_name=$TF_STATE_RG" \
-            -backend-config="storage_account_name=$TF_STATE_STORAGE" \
-            -backend-config="container_name=$TF_STATE_CONTAINER" \
-            -backend-config="key=${TF_ENV}.terraform.tfstate"
+          BACKEND_ARGS=()
+          if [ -n "$TF_STATE_RG" ]; then BACKEND_ARGS+=("-backend-config=resource_group_name=$TF_STATE_RG"); fi
+          if [ -n "$TF_STATE_STORAGE" ]; then BACKEND_ARGS+=("-backend-config=storage_account_name=$TF_STATE_STORAGE"); fi
+          if [ -n "$TF_STATE_CONTAINER" ]; then BACKEND_ARGS+=("-backend-config=container_name=$TF_STATE_CONTAINER"); fi
+          if [ -n "$TF_STATE_RG$TF_STATE_STORAGE$TF_STATE_CONTAINER" ]; then BACKEND_ARGS+=("-backend-config=key=${TF_ENV}.terraform.tfstate"); fi
+
+          terraform init -input=false "${BACKEND_ARGS[@]}"
 
           if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$TF_ACTION" = "destroy" ]; then
             terraform destroy -auto-approve -input=false -no-color

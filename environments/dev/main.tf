@@ -31,3 +31,15 @@ module "aks" {
 
   depends_on = [module.resource_group]
 }
+
+# -----------------------------------------------------------------------------
+# 4. Dev Environment: Azure Storage Account
+# -----------------------------------------------------------------------------
+module "storage_account" {
+  source = "../../modules/storage_account"
+
+  storage_accounts = var.storage_accounts
+  default_tags     = var.default_tags
+
+  depends_on = [module.resource_group]
+}

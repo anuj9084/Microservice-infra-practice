@@ -21,3 +21,13 @@ output "aks_kube_config_raw" {
   value       = module.aks.kube_config_raw
   sensitive   = true
 }
+
+output "storage_account_ids" {
+  description = "Storage Account IDs for dev environment"
+  value       = module.storage_account.ids
+}
+
+output "storage_account_primary_blob_endpoints" {
+  description = "Storage Account primary blob endpoints for dev environment"
+  value       = module.storage_account.primary_blob_endpoints
+}

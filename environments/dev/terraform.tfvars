@@ -49,3 +49,21 @@ clusters = {
     }
   }
 }
+
+# 4. Dev Storage Account
+storage_accounts = {
+  dev_storage = {
+    name                     = "stdevk8s01"
+    resource_group_name      = "rg-k8s-dev-eastus"
+    location                 = "eastus"
+    account_tier             = "Standard"
+    account_replication_type = "LRS"
+
+    containers = {
+      app_data = {
+        name                  = "appdata"
+        container_access_type = "private"
+      }
+    }
+  }
+}

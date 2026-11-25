@@ -24,14 +24,20 @@ D:/K8 Practice/
 │   │   ├── variables.tf
 │   │   ├── outputs.tf
 │   │   └── versions.tf
-│   └── aks/
+│   ├── aks/
 │       ├── main.tf                  # for_each = var.clusters
+│       ├── variables.tf
+│       ├── outputs.tf
+│       └── versions.tf
+│   └── storage_account/
+│       ├── main.tf                  # for_each = var.storage_accounts
 │       ├── variables.tf
 │       ├── outputs.tf
 │       └── versions.tf
 ├── environments/                    # Environment entrypoints
 │   └── dev/
 │       ├── .terraform.lock.hcl      # Provider dependency lockfile
+│       ├── backend.tf               # AzureRM remote state backend block
 │       ├── main.tf                  # Calls ../../modules/*
 │       ├── variables.tf             # Input variables schema
 │       ├── outputs.tf               # Environment outputs
@@ -81,10 +87,10 @@ This repository includes a 3-stage GitHub Actions CI/CD & security workflow loca
 
 1. **Repository Secret**:
    - `AZURE_CREDENTIALS`: JSON output from `az ad sp create-for-rbac --sdk-auth` (`clientId`, `clientSecret`, `subscriptionId`, `tenantId`).
-2. **Repository Variables (or Secrets)**:
+2. **Repository Variables (or Secrets) — optional overrides for `backend.tf`**:
    - `TF_STATE_RG`: Resource group containing your Terraform remote state Storage Account.
    - `TF_STATE_STORAGE`: Azure Storage Account name for remote state.
    - `TF_STATE_CONTAINER`: Blob container name for remote state.
 3. **GitHub Environment**:
-   - Create an environment named `dev` under **Settings > Environments** and configure **Required reviewers** to enforce manual approval before `Apply`.
+   - Create an environment named `dev` under **Settings > Environments** (used by both `plan` and `apply`, so `AZURE_CREDENTIALS` and `TF_STATE_*` can live in Repository or `dev` Environment settings).
 
