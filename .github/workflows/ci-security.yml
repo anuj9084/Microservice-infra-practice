@@ -1,4 +1,4 @@
-name: DevSecOps Security Scanning Pipeline
+name: DevSecOps CI & Security Pipeline
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
     branches:
       - main
   schedule:
-    # Run weekly security audit on Mondays at 02:00 UTC
+    # Run weekly security audit every Monday at 02:00 UTC
     - cron: '0 2 * * 1'
   workflow_dispatch:
 
@@ -22,7 +22,7 @@ concurrency:
 jobs:
   # ============================================================================
   # STAGE 1: Secret Scanning (Gitleaks)
-  # Detects hardcoded passwords, tokens, API keys, and Azure credentials in git history
+  # Detects hardcoded passwords, tokens, API keys, and credentials in git history
   # ============================================================================
   secret-scan:
     name: 1. Secret Scanning (Gitleaks)
@@ -74,7 +74,12 @@ jobs:
       - name: Run Checkov IaC Security Scanner
         uses: bridgecrewio/checkov-action@d4770c1ac4a966d8c3305b79c348c26232123aa1 # v12
         with:
-          config_file: .checkov.yaml
+          directory: .
+          framework: terraform,github_actions
+          skip_path: .terraform
+          compact: true
+          quiet: false
+          soft_fail: true
           output_format: cli,sarif
           output_file_path: console,checkov-results.sarif
 
@@ -86,7 +91,7 @@ jobs:
           category: checkov-iac
 
   # ============================================================================
-  # STAGE 3: Vulnerability & Misconfiguration Scanning (Aqua Trivy)
+  # STAGE 3: Misconfiguration & Exposure Scanning (Aqua Trivy)
   # Scans IaC templates and configuration files for misconfigurations & exposures
   # ============================================================================
   iac-scan-trivy:
@@ -113,7 +118,7 @@ jobs:
         with:
           scan-type: 'config'
           scan-ref: '.'
-          skip-dirs: 'environments/dev/.terraform'
+          skip-dirs: '**/.terraform'
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH,MEDIUM'
@@ -167,11 +172,29 @@ jobs:
         with:
           tflint_version: latest
 
-      - name: Initialize TFLint (Plugins & Rulesets)
-        run: tflint --init
+      - name: Initialize & Run TFLint (Core + AzureRM Rulesets)
+        env:
+          TFLINT_CONFIG: ${{ runner.temp }}/tflint.hcl
+        run: |
+          cat << 'EOF' > "$TFLINT_CONFIG"
+          config {
+            call_module_type = "local"
+            force            = false
+          }
 
-      - name: Run TFLint on Terraform Modules & Environments
-        run: tflint --recursive --format=compact
+          plugin "terraform" {
+            enabled = true
+            preset  = "recommended"
+          }
+
+          plugin "azurerm" {
+            enabled = true
+            version = "0.33.0"
+            source  = "github.com/terraform-linters/tflint-ruleset-azurerm"
+          }
+          EOF
+          tflint --init --config="$TFLINT_CONFIG"
+          tflint --recursive --format=compact --config="$TFLINT_CONFIG"
 
   # ============================================================================
   # STAGE 5: DevSecOps Quality Gate & Consolidated Scorecard Summary

@@ -10,6 +10,9 @@ Shared reusable modules are located under `modules/`, and the environment config
 
 ```text
 D:/K8 Practice/
+├── .github/
+│   └── workflows/
+│       └── ci-security.yml          # Single hardened DevSecOps pipeline
 ├── modules/                         # Reusable child modules
 │   ├── resource_group/
 │   │   ├── main.tf                  # for_each = var.resource_groups
@@ -28,11 +31,14 @@ D:/K8 Practice/
 │       └── versions.tf
 ├── environments/                    # Environment entrypoints
 │   └── dev/
+│       ├── .terraform.lock.hcl      # Provider dependency lockfile
 │       ├── main.tf                  # Calls ../../modules/*
 │       ├── variables.tf             # Input variables schema
 │       ├── outputs.tf               # Environment outputs
 │       ├── versions.tf              # Provider & version constraints
 │       └── terraform.tfvars         # Dev environment values
+├── .gitignore
+├── LICENSE
 └── README.md
 ```
 
@@ -55,7 +61,7 @@ To add future environments (such as `prod` or `qa`), simply add a folder under `
 
 ## DevSecOps Security Scanning Pipeline
 
-This repository includes a multi-stage GitHub Actions security workflow located in [`.github/workflows/security-scan.yml`](file:///D:/K8 Practice/.github/workflows/security-scan.yml).
+This repository includes a single hardened GitHub Actions security workflow located in [`.github/workflows/ci-security.yml`](.github/workflows/ci-security.yml).
 
 ### Scanning Stages
 
