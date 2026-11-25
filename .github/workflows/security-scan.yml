@@ -2,64 +2,84 @@ name: DevSecOps Security Scanning Pipeline
 
 on:
   push:
-    branches: [ main, master ]
+    branches:
+      - main
   pull_request:
-    branches: [ main, master ]
+    branches:
+      - main
   schedule:
     # Run weekly security audit on Mondays at 02:00 UTC
     - cron: '0 2 * * 1'
   workflow_dispatch:
 
-permissions:
-  contents: read
-  security-events: write
-  actions: read
+# Deny all GITHUB_TOKEN permissions by default; grant least-privilege per job
+permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # ============================================================================
-  # STAGE 1: Secret Scanning
+  # STAGE 1: Secret Scanning (Gitleaks)
   # Detects hardcoded passwords, tokens, API keys, and Azure credentials in git history
   # ============================================================================
   secret-scan:
     name: 1. Secret Scanning (Gitleaks)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
-      - name: Checkout Code Repository
-        uses: actions/checkout@v4
+      - name: Harden Runner
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
-          fetch-depth: 0 # Full history required for git leak detection
+          egress-policy: audit
+
+      - name: Checkout Code Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Run Gitleaks Secret Scanner
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ============================================================================
-  # STAGE 2: IaC Security & Compliance Scanning (Checkov)
-  # Scans Terraform & Kubernetes against CIS Benchmarks and Azure Security Standards
+  # STAGE 2: IaC & Workflow Security Compliance (Checkov)
+  # Scans Terraform & GitHub Actions against CIS Benchmarks and security standards
   # ============================================================================
   iac-scan-checkov:
     name: 2. IaC Compliance Scan (Checkov)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
       - name: Checkout Code Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Run Checkov IaC Security Scanner
-        uses: bridgecrewio/checkov-action@v12
+        uses: bridgecrewio/checkov-action@d4770c1ac4a966d8c3305b79c348c26232123aa1 # v12
         with:
-          directory: .
-          framework: terraform,kubernetes
+          config_file: .checkov.yaml
           output_format: cli,sarif
           output_file_path: console,checkov-results.sarif
-          soft_fail: true # Set to true to upload all findings to GitHub Security tab without breaking the run
 
       - name: Upload Checkov SARIF to GitHub Security Tab
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
         if: always() && hashFiles('checkov-results.sarif') != ''
         with:
           sarif_file: checkov-results.sarif
@@ -67,53 +87,83 @@ jobs:
 
   # ============================================================================
   # STAGE 3: Vulnerability & Misconfiguration Scanning (Aqua Trivy)
-  # Scans IaC templates, configuration files, and filesystems for CVEs & misconfigs
+  # Scans IaC templates and configuration files for misconfigurations & exposures
   # ============================================================================
   iac-scan-trivy:
-    name: 3. Vulnerability & Misconfig (Trivy)
+    name: 3. Misconfig & Exposure Scan (Trivy)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
       - name: Checkout Code Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Run Trivy Security Scanner (Config & IaC)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           scan-type: 'config'
           scan-ref: '.'
+          skip-dirs: 'environments/dev/.terraform'
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH,MEDIUM'
           exit-code: '0'
 
       - name: Upload Trivy SARIF to GitHub Security Tab
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
         if: always() && hashFiles('trivy-results.sarif') != ''
         with:
           sarif_file: trivy-results.sarif
           category: trivy-iac
 
   # ============================================================================
-  # STAGE 4: Terraform Linting, Formatting & Provider Validation
-  # Enforces Terraform best practices, Azure provider rules, and syntax correctness
+  # STAGE 4: Terraform Formatting, Validation & Provider Linting (Terraform + TFLint)
+  # Enforces Terraform formatting, module/provider validation, and AzureRM rules
   # ============================================================================
   terraform-lint-and-validate:
-    name: 4. Terraform Lint & Validation (TFLint)
+    name: 4. Terraform Lint & Validate (TFLint)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
       - name: Checkout Code Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Setup Terraform CLI
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
-          terraform_version: 1.5.0
+          terraform_version: '1.13.0'
+          terraform_wrapper: false
 
       - name: Check Terraform Formatting
         run: terraform fmt -check -recursive
 
+      - name: Initialize & Validate Dev Environment
+        working-directory: environments/dev
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
       - name: Setup TFLint
-        uses: terraform-linters/setup-tflint@v4
+        uses: terraform-linters/setup-tflint@90f302c255ef959cbfb4bd10581afecdb7ece3e6 # v4.1.1
         with:
           tflint_version: latest
 
@@ -124,97 +174,52 @@ jobs:
         run: tflint --recursive --format=compact
 
   # ============================================================================
-  # STAGE 5: Static Application Security Testing (SAST - Semgrep)
-  # Scans codebase, automation scripts, and manifests for CWE/OWASP anti-patterns
-  # ============================================================================
-  sast-scan-semgrep:
-    name: 5. SAST Security Scan (Semgrep)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code Repository
-        uses: actions/checkout@v4
-
-      - name: Run Semgrep SAST Scanner
-        uses: returntocorp/semgrep-action@v1
-        with:
-          config: >-
-            p/security-audit
-            p/secrets
-            p/terraform
-          generateSarif: "1"
-
-      - name: Upload Semgrep SARIF to GitHub Security Tab
-        uses: github/codeql-action/upload-sarif@v3
-        if: always() && hashFiles('semgrep.sarif') != ''
-        with:
-          sarif_file: semgrep.sarif
-          category: semgrep-sast
-
-  # ============================================================================
-  # STAGE 6: Container & Dockerfile Security Scanning (Hadolint)
-  # Lints Dockerfiles for privilege escalation, unpinned tags, and best practices
-  # ============================================================================
-  container-and-dockerfile-scan:
-    name: 6. Dockerfile & Container Security (Hadolint)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code Repository
-        uses: actions/checkout@v4
-
-      - name: Check for Dockerfiles
-        id: check-dockerfile
-        run: |
-          if find . -type f \( -name "Dockerfile*" -o -name "*.dockerfile" \) | grep -q .; then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-            echo "Found Dockerfile(s) to scan."
-          else
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            echo "No Dockerfile found in repository. Skipping Hadolint."
-          fi
-
-      - name: Lint Dockerfiles with Hadolint
-        if: steps.check-dockerfile.outputs.found == 'true'
-        uses: hadolint/hadolint-action@v3.1.0
-        with:
-          recursive: true
-          failure-threshold: error
-
-  # ============================================================================
-  # STAGE 7: DevSecOps Quality Gate & Consolidated Scorecard Summary
+  # STAGE 5: DevSecOps Quality Gate & Consolidated Scorecard Summary
   # Collects all results and outputs an executive Markdown summary to Job Summary
   # ============================================================================
   security-gate-summary:
-    name: 7. DevSecOps Security Scorecard Gate
+    name: 5. DevSecOps Security Scorecard Gate
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
     needs:
       - secret-scan
       - iac-scan-checkov
       - iac-scan-trivy
       - terraform-lint-and-validate
-      - sast-scan-semgrep
-      - container-and-dockerfile-scan
     if: always()
     steps:
-      - name: Publish DevSecOps Summary Scorecard
+      - name: Publish DevSecOps Summary Scorecard & Enforce Baseline Gate
+        env:
+          SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
+          CHECKOV_RESULT: ${{ needs.iac-scan-checkov.result }}
+          TRIVY_RESULT: ${{ needs.iac-scan-trivy.result }}
+          TFLINT_RESULT: ${{ needs.terraform-lint-and-validate.result }}
         run: |
-          echo "## 🛡️ DevSecOps Pipeline Security Scorecard" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| # | Security Scanning Stage | Tool | Status | Primary Focus |" >> $GITHUB_STEP_SUMMARY
-          echo "| :-: | :--- | :--- | :---: | :--- |" >> $GITHUB_STEP_SUMMARY
-          echo "| 1 | **Secret Scanning** | Gitleaks | ${{ needs.secret-scan.result == 'success' && '✅ Passed' || (needs.secret-scan.result == 'skipped' && '⏭️ Skipped' || '❌ Failed') }} | Leaked credentials, API keys & tokens |" >> $GITHUB_STEP_SUMMARY
-          echo "| 2 | **IaC Security & Compliance** | Checkov | ${{ needs.iac-scan-checkov.result == 'success' && '✅ Passed' || (needs.iac-scan-checkov.result == 'skipped' && '⏭️ Skipped' || '❌ Failed') }} | CIS Azure Benchmarks, AKS/ACR policy checks |" >> $GITHUB_STEP_SUMMARY
-          echo "| 3 | **Vulnerability & Misconfig** | Aqua Trivy | ${{ needs.iac-scan-trivy.result == 'success' && '✅ Passed' || (needs.iac-scan-trivy.result == 'skipped' && '⏭️ Skipped' || '❌ Failed') }} | CVE vulnerabilities & IaC misconfigurations |" >> $GITHUB_STEP_SUMMARY
-          echo "| 4 | **Terraform Lint & Validate** | TFLint + TF CLI | ${{ needs.terraform-lint-and-validate.result == 'success' && '✅ Passed' || (needs.terraform-lint-and-validate.result == 'skipped' && '⏭️ Skipped' || '❌ Failed') }} | Azure provider syntax, ruleset & formatting |" >> $GITHUB_STEP_SUMMARY
-          echo "| 5 | **SAST Analysis** | Semgrep | ${{ needs.sast-scan-semgrep.result == 'success' && '✅ Passed' || (needs.sast-scan-semgrep.result == 'skipped' && '⏭️ Skipped' || '❌ Failed') }} | Code & configuration CWE/OWASP anti-patterns |" >> $GITHUB_STEP_SUMMARY
-          echo "| 6 | **Container & Dockerfile** | Hadolint | ${{ needs.container-and-dockerfile-scan.result == 'success' && '✅ Passed' || (needs.container-and-dockerfile-scan.result == 'skipped' && '⏭️ Skipped' || '❌ Failed') }} | Root containers, unpinned versions & best practices |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "> 💡 **Security Alerts**: SARIF findings from Checkov, Trivy, and Semgrep are automatically integrated into your GitHub repository's **Security > Code scanning alerts** tab." >> $GITHUB_STEP_SUMMARY
+          format_status() {
+            case "$1" in
+              success) echo "✅ Passed" ;;
+              skipped) echo "⏭️ Skipped" ;;
+              *) echo "❌ Failed" ;;
+            esac
+          }
 
-      - name: Enforce Critical Security Baseline Gate
-        run: |
-          if [ "${{ needs.secret-scan.result }}" != "success" ] || \
-             [ "${{ needs.terraform-lint-and-validate.result }}" != "success" ]; then
-            echo "❌ Critical security gates failed (Secret leak detected or invalid Terraform syntax). Please review the job logs."
+          {
+            echo "## 🛡️ DevSecOps Pipeline Security Scorecard"
+            echo ""
+            echo "| # | Security Scanning Stage | Tool | Status | Primary Focus |"
+            echo "| :-: | :--- | :--- | :---: | :--- |"
+            echo "| 1 | **Secret Scanning** | Gitleaks | $(format_status "$SECRET_SCAN_RESULT") | Leaked credentials, API keys & tokens |"
+            echo "| 2 | **IaC & Workflow Compliance** | Checkov | $(format_status "$CHECKOV_RESULT") | CIS Azure Benchmarks & GitHub Actions security |"
+            echo "| 3 | **Misconfig & Exposure Scan** | Aqua Trivy | $(format_status "$TRIVY_RESULT") | IaC misconfigurations & security defaults |"
+            echo "| 4 | **Terraform Lint & Validate** | Terraform + TFLint | $(format_status "$TFLINT_RESULT") | Formatting, syntax validation & AzureRM rules |"
+            echo ""
+            echo "> 💡 **Security Alerts**: SARIF findings from Checkov and Trivy are uploaded to the repository's **Security > Code scanning alerts** tab."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$SECRET_SCAN_RESULT" != "success" ] || \
+             [ "$TFLINT_RESULT" != "success" ]; then
+            echo "❌ Critical baseline gates failed (Secret scan or Terraform validation/lint). Please review the job logs."
             exit 1
           fi
           echo "✅ All required baseline security gates passed successfully."

@@ -23,7 +23,7 @@ registries = {
     resource_group_name = "rg-k8s-dev-eastus"
     location            = "eastus"
     sku                 = "Basic"
-    admin_enabled       = true
+    admin_enabled       = false
   }
 }
 
@@ -39,7 +39,7 @@ clusters = {
     # Nested map for the default node pool
     default_node_pool = {
       name       = "system"
-      vm_size    = "Standard_D2s_v5"
+      vm_size    = "Standard_D2s_v4"
       node_count = 2
     }
 

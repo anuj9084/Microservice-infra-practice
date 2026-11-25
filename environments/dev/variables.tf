@@ -33,7 +33,7 @@ variable "clusters" {
     # Nested Map / Object for Default Node Pool
     default_node_pool = object({
       name            = optional(string, "system")
-      vm_size         = optional(string, "Standard_D2s_v5")
+      vm_size         = optional(string, "Standard_D2s_v4")
       node_count      = optional(number, 2)
       os_disk_size_gb = optional(number, 128)
       tags            = optional(map(string), {})

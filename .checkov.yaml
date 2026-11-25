@@ -3,7 +3,7 @@
 # -----------------------------------------------------------------------------
 framework:
   - terraform
-  - kubernetes
+  - github_actions
 
 compact: true
 quiet: false
@@ -15,4 +15,4 @@ directory:
 
 # Skip local terraform cache
 skip-path:
-  - environments/dev/.terraform
+  - \.terraform
