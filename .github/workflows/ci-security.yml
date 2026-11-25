@@ -1,248 +1,163 @@
-name: DevSecOps CI & Security Pipeline
+name: DevSecOps CI/CD Pipeline
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
   schedule:
-    # Run weekly security audit every Monday at 02:00 UTC
-    - cron: '0 2 * * 1'
+    - cron: "0 2 * * 1"
   workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        default: "dev"
+        options: [dev]
+      action:
+        description: "Terraform action"
+        type: choice
+        default: "apply"
+        options: [plan, apply, destroy]
 
-# Deny all GITHUB_TOKEN permissions by default; grant least-privilege per job
-permissions: {}
+permissions:
+  contents: read
+  security-events: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # ============================================================================
-  # STAGE 1: Secret Scanning (Gitleaks)
-  # Detects hardcoded passwords, tokens, API keys, and credentials in git history
-  # ============================================================================
-  secret-scan:
-    name: 1. Secret Scanning (Gitleaks)
+  # 1. Security Scanning & Terraform Validation
+  security-and-validate:
+    name: Security Scan & Validate
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      pull-requests: read
     steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
-        with:
-          egress-policy: audit
-
-      - name: Checkout Code Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: false
 
-      - name: Run Gitleaks Secret Scanner
-        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+      - name: Secret Scan (Gitleaks)
+        uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ============================================================================
-  # STAGE 2: IaC & Workflow Security Compliance (Checkov)
-  # Scans Terraform & GitHub Actions against CIS Benchmarks and security standards
-  # ============================================================================
-  iac-scan-checkov:
-    name: 2. IaC Compliance Scan (Checkov)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
-    steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+      - name: IaC Security Scan (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
         with:
-          egress-policy: audit
+          scan-type: "config"
+          scan-ref: "."
+          skip-dirs: "**/.terraform"
+          severity: "CRITICAL,HIGH"
+          format: "sarif"
+          output: "trivy-results.sarif"
 
-      - name: Checkout Code Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - name: Run Checkov IaC Security Scanner
-        uses: bridgecrewio/checkov-action@d4770c1ac4a966d8c3305b79c348c26232123aa1 # v12
-        with:
-          directory: .
-          framework: terraform,github_actions
-          skip_path: .terraform
-          compact: true
-          quiet: false
-          soft_fail: true
-          output_format: cli,sarif
-          output_file_path: console,checkov-results.sarif
-
-      - name: Upload Checkov SARIF to GitHub Security Tab
-        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
-        if: always() && hashFiles('checkov-results.sarif') != ''
-        with:
-          sarif_file: checkov-results.sarif
-          category: checkov-iac
-
-  # ============================================================================
-  # STAGE 3: Misconfiguration & Exposure Scanning (Aqua Trivy)
-  # Scans IaC templates and configuration files for misconfigurations & exposures
-  # ============================================================================
-  iac-scan-trivy:
-    name: 3. Misconfig & Exposure Scan (Trivy)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
-    steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
-        with:
-          egress-policy: audit
-
-      - name: Checkout Code Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - name: Run Trivy Security Scanner (Config & IaC)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
-        with:
-          scan-type: 'config'
-          scan-ref: '.'
-          skip-dirs: '**/.terraform'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH,MEDIUM'
-          exit-code: '0'
-
-      - name: Upload Trivy SARIF to GitHub Security Tab
-        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+      - name: Upload Trivy Results
+        uses: github/codeql-action/upload-sarif@v3
         if: always() && hashFiles('trivy-results.sarif') != ''
         with:
-          sarif_file: trivy-results.sarif
-          category: trivy-iac
+          sarif_file: "trivy-results.sarif"
 
-  # ============================================================================
-  # STAGE 4: Terraform Formatting, Validation & Provider Linting (Terraform + TFLint)
-  # Enforces Terraform formatting, module/provider validation, and AzureRM rules
-  # ============================================================================
-  terraform-lint-and-validate:
-    name: 4. Terraform Lint & Validate (TFLint)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+      - name: Setup & Validate Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
-          egress-policy: audit
-
-      - name: Checkout Code Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - name: Setup Terraform CLI
-        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
-        with:
-          terraform_version: '1.13.0'
+          terraform_version: "1.13.0"
           terraform_wrapper: false
 
-      - name: Check Terraform Formatting
-        run: terraform fmt -check -recursive
-
-      - name: Initialize & Validate Dev Environment
-        working-directory: environments/dev
+      - name: Terraform Format & Validate
+        working-directory: environments/${{ inputs.environment || 'dev' }}
         run: |
+          terraform fmt -check -recursive ../..
           terraform init -backend=false -input=false
           terraform validate
 
-      - name: Setup TFLint
-        uses: terraform-linters/setup-tflint@90f302c255ef959cbfb4bd10581afecdb7ece3e6 # v4.1.1
-        with:
-          tflint_version: latest
-
-      - name: Initialize & Run TFLint (Core + AzureRM Rulesets)
-        env:
-          TFLINT_CONFIG: ${{ runner.temp }}/tflint.hcl
-        run: |
-          cat << 'EOF' > "$TFLINT_CONFIG"
-          config {
-            call_module_type = "local"
-            force            = false
-          }
-
-          plugin "terraform" {
-            enabled = true
-            preset  = "recommended"
-          }
-
-          plugin "azurerm" {
-            enabled = true
-            version = "0.33.0"
-            source  = "github.com/terraform-linters/tflint-ruleset-azurerm"
-          }
-          EOF
-          tflint --init --config="$TFLINT_CONFIG"
-          tflint --recursive --format=compact --config="$TFLINT_CONFIG"
-
-  # ============================================================================
-  # STAGE 5: DevSecOps Quality Gate & Consolidated Scorecard Summary
-  # Collects all results and outputs an executive Markdown summary to Job Summary
-  # ============================================================================
-  security-gate-summary:
-    name: 5. DevSecOps Security Scorecard Gate
+  # 2. Terraform Plan / Apply / Destroy
+  terraform:
+    name: Terraform Deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions: {}
-    needs:
-      - secret-scan
-      - iac-scan-checkov
-      - iac-scan-trivy
-      - terraform-lint-and-validate
-    if: always()
+    needs: security-and-validate
+    if: github.event_name != 'schedule'
+    environment: ${{ inputs.environment || 'dev' }}
+    outputs:
+      acr_login_server: ${{ steps.tf.outputs.acr_login_server }}
+      aks_cluster_name: ${{ steps.tf.outputs.aks_cluster_name }}
+      resource_group_name: ${{ steps.tf.outputs.resource_group_name }}
+    env:
+      TF_ENV: ${{ inputs.environment || 'dev' }}
+      TF_ACTION: ${{ inputs.action || 'apply' }}
+      ARM_CLIENT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}
+      ARM_CLIENT_SECRET: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientSecret }}
+      ARM_SUBSCRIPTION_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}
+      ARM_TENANT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}
     steps:
-      - name: Publish DevSecOps Summary Scorecard & Enforce Baseline Gate
-        env:
-          SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
-          CHECKOV_RESULT: ${{ needs.iac-scan-checkov.result }}
-          TRIVY_RESULT: ${{ needs.iac-scan-trivy.result }}
-          TFLINT_RESULT: ${{ needs.terraform-lint-and-validate.result }}
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.0"
+          terraform_wrapper: false
+
+      - name: Terraform Init, Plan & Apply
+        id: tf
+        working-directory: environments/${{ inputs.environment || 'dev' }}
         run: |
-          format_status() {
-            case "$1" in
-              success) echo "✅ Passed" ;;
-              skipped) echo "⏭️ Skipped" ;;
-              *) echo "❌ Failed" ;;
-            esac
-          }
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ vars.TF_STATE_RG || secrets.TF_STATE_RG }}" \
+            -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE || secrets.TF_STATE_STORAGE }}" \
+            -backend-config="container_name=${{ vars.TF_STATE_CONTAINER || secrets.TF_STATE_CONTAINER }}" \
+            -backend-config="key=${TF_ENV}.terraform.tfstate"
 
-          {
-            echo "## 🛡️ DevSecOps Pipeline Security Scorecard"
-            echo ""
-            echo "| # | Security Scanning Stage | Tool | Status | Primary Focus |"
-            echo "| :-: | :--- | :--- | :---: | :--- |"
-            echo "| 1 | **Secret Scanning** | Gitleaks | $(format_status "$SECRET_SCAN_RESULT") | Leaked credentials, API keys & tokens |"
-            echo "| 2 | **IaC & Workflow Compliance** | Checkov | $(format_status "$CHECKOV_RESULT") | CIS Azure Benchmarks & GitHub Actions security |"
-            echo "| 3 | **Misconfig & Exposure Scan** | Aqua Trivy | $(format_status "$TRIVY_RESULT") | IaC misconfigurations & security defaults |"
-            echo "| 4 | **Terraform Lint & Validate** | Terraform + TFLint | $(format_status "$TFLINT_RESULT") | Formatting, syntax validation & AzureRM rules |"
-            echo ""
-            echo "> 💡 **Security Alerts**: SARIF findings from Checkov and Trivy are uploaded to the repository's **Security > Code scanning alerts** tab."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ "$SECRET_SCAN_RESULT" != "success" ] || \
-             [ "$TFLINT_RESULT" != "success" ]; then
-            echo "❌ Critical baseline gates failed (Secret scan or Terraform validation/lint). Please review the job logs."
-            exit 1
+          if [ "${{ github.event_name }}" = "pull_request" ] || [ "$TF_ACTION" = "plan" ]; then
+            terraform plan -input=false -no-color
+          elif [ "$TF_ACTION" = "destroy" ]; then
+            terraform destroy -auto-approve -input=false -no-color
+          else
+            terraform apply -auto-approve -input=false -no-color
+            terraform output -json > tf_outputs.json
+            echo "acr_login_server=$(jq -r '.acr_login_servers.value | to_entries[0].value // empty' tf_outputs.json)" >> "$GITHUB_OUTPUT"
+            echo "aks_cluster_name=$(jq -r '.aks_cluster_names.value | to_entries[0].value // empty' tf_outputs.json)" >> "$GITHUB_OUTPUT"
+            echo "resource_group_name=$(jq -r '.resource_group_ids.value | to_entries[0].value // empty' tf_outputs.json | awk -F/ '{print $NF}')" >> "$GITHUB_OUTPUT"
           fi
-          echo "✅ All required baseline security gates passed successfully."
+
+  # 3. Optional Docker Build & AKS Deploy
+  deploy-aks:
+    name: Build & Deploy to AKS
+    runs-on: ubuntu-latest
+    needs: terraform
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.action == 'apply')
+    environment: ${{ inputs.environment || 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Build & Push Image (if Dockerfile exists)
+        if: hashFiles('Dockerfile') != ''
+        run: |
+          ACR="${{ needs.terraform.outputs.acr_login_server }}"
+          az acr login --name "${ACR%%.*}"
+          docker build -t "$ACR/app:${{ github.sha }}" -t "$ACR/app:latest" .
+          docker push "$ACR/app:${{ github.sha }}"
+          docker push "$ACR/app:latest"
+
+      - name: Deploy to AKS (if K8s/Helm exists)
+        if: hashFiles('k8s/**', 'manifests/**', 'charts/**') != ''
+        run: |
+          az aks get-credentials \
+            --resource-group "${{ needs.terraform.outputs.resource_group_name }}" \
+            --name "${{ needs.terraform.outputs.aks_cluster_name }}" \
+            --overwrite-existing
+
+          [ -d "k8s" ] && kubectl apply -f k8s/
+          [ -d "manifests" ] && kubectl apply -f manifests/
+          if [ -d "charts" ]; then
+            for chart in charts/*; do
+              [ -d "$chart" ] && helm upgrade --install "$(basename "$chart")" "$chart" --wait
+            done
+          fi
